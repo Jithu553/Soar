@@ -34,7 +34,6 @@ import {
   Maximize
 } from 'lucide-react';
 import { SecurityAlert, SecurityAsset, SecurityVulnerability, ThreatIntelligenceFeed, AuditLog, SecurityRole, SecurityUser } from './types';
-import DocumentationHub from './components/DocumentationHub';
 import RiskSparkline from './components/RiskSparkline';
 import AuditLogsView from './components/AuditLogsView';
 import VulnerabilityDetailsDrawer from './components/VulnerabilityDetailsDrawer';
@@ -46,7 +45,7 @@ import LoginPage from './components/LoginPage';
 import { LogOut, Lock, ShieldAlert } from 'lucide-react';
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<'ops' | 'graph' | 'logs' | 'blueprints'>('ops');
+  const [activeTab, setActiveTab] = useState<'ops' | 'graph' | 'logs'>('ops');
   const [opsSubTab, setOpsSubTab] = useState<'modulator' | 'vulnerabilities' | 'intel'>('modulator');
   
   // RBAC User Session State
@@ -134,13 +133,135 @@ export default function App() {
 
   // Detailed Interactive Graph Framework States
   const [selectedGraphAssetId, setSelectedGraphAssetId] = useState<string | null>("ASSET-001");
+  const [secondarySelectedGraphAssetId, setSecondarySelectedGraphAssetId] = useState<string | null>("ASSET-002");
+  
+  const handleSelectNodeInGraph = (nodeId: string) => {
+    if (selectedGraphAssetId && selectedGraphAssetId !== nodeId) {
+      setSecondarySelectedGraphAssetId(selectedGraphAssetId);
+    }
+    setSelectedGraphAssetId(nodeId);
+  };
+
   const [graphEnvFilter, setGraphEnvFilter] = useState<'All' | 'Production' | 'Development'>('All');
   const [graphMitigationMode, setGraphMitigationMode] = useState<'standard' | 'threat-path' | 'attack-simulation'>('attack-simulation');
+  const [animateTrafficFlow, setAnimateTrafficFlow] = useState<boolean>(true);
+  const [trafficThroughput, setTrafficThroughput] = useState<'low' | 'normal' | 'high' | 'peak'>('normal');
   
   // Tactical simulator overrides
   const [isolatedAssets, setIsolatedAssets] = useState<Record<string, boolean>>({});
   const [shieldedAssets, setShieldedAssets] = useState<Record<string, boolean>>({});
   const [patchedAssets, setPatchedAssets] = useState<Record<string, boolean>>({});
+
+  // Connected paths and dependencies helper for dynamic topology highlighting
+  const ASSET_NAMES: Record<string, string> = {
+    "ASSET-001": "Prod WebPortal",
+    "ASSET-002": "Customer DB",
+    "ASSET-003": "Sandbox API",
+    "ASSET-004": "Active Directory",
+    "ASSET-005": "Billing API"
+  };
+
+  const findShortestPathRoute = (source: string | null, target: string | null): string[] | null => {
+    if (!source || !target) return null;
+    if (source === target) return [source];
+
+    const adj: Record<string, string[]> = {
+      "ASSET-001": ["ASSET-002", "ASSET-004"],
+      "ASSET-002": ["ASSET-001", "ASSET-005"],
+      "ASSET-003": [],
+      "ASSET-004": ["ASSET-001"],
+      "ASSET-005": ["ASSET-002"]
+    };
+
+    const queue: [string, string[]][] = [[source, [source]]];
+    const visited = new Set<string>([source]);
+
+    while (queue.length > 0) {
+      const [current, path] = queue.shift()!;
+      if (current === target) return path;
+
+      for (const neighbor of (adj[current] || [])) {
+        if (!visited.has(neighbor)) {
+          visited.add(neighbor);
+          queue.push([neighbor, [...path, neighbor]]);
+        }
+      }
+    }
+
+    return null;
+  };
+
+  const checkIsConnected = (nodeAId: string, nodeBId: string | null) => {
+    if (!nodeBId) return true;
+    if (nodeAId === nodeBId) return true;
+    const connectedPairs = [
+      ["ASSET-001", "ASSET-002"],
+      ["ASSET-005", "ASSET-002"],
+      ["ASSET-001", "ASSET-004"]
+    ];
+    return connectedPairs.some(pair => 
+      (pair[0] === nodeAId && pair[1] === nodeBId) || 
+      (pair[0] === nodeBId && pair[1] === nodeAId)
+    );
+  };
+
+  const getSelectionOpacityForNode = (nodeId: string) => {
+    if (selectedGraphAssetId && secondarySelectedGraphAssetId && selectedGraphAssetId !== secondarySelectedGraphAssetId) {
+      const path = findShortestPathRoute(selectedGraphAssetId, secondarySelectedGraphAssetId);
+      if (path) {
+        return path.includes(nodeId) ? 1.0 : 0.15;
+      } else {
+        return (nodeId === selectedGraphAssetId || nodeId === secondarySelectedGraphAssetId) ? 1.0 : 0.15;
+      }
+    }
+    if (selectedGraphAssetId) {
+      return checkIsConnected(nodeId, selectedGraphAssetId) ? 1.0 : 0.15;
+    }
+    if (nodeId === "ASSET-003") {
+      return (graphEnvFilter === 'All' || graphEnvFilter === 'Development') ? 1.0 : 0.15;
+    } else {
+      return (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
+    }
+  };
+
+  const getSelectionOpacityForLink = (nodeAId: string, nodeBId: string) => {
+    const isNodeAVisibleInEnv = nodeAId === "ASSET-003" 
+      ? (graphEnvFilter === 'All' || graphEnvFilter === 'Development')
+      : (graphEnvFilter === 'All' || graphEnvFilter === 'Production');
+    const isNodeBVisibleInEnv = nodeBId === "ASSET-003"
+      ? (graphEnvFilter === 'All' || graphEnvFilter === 'Development')
+      : (graphEnvFilter === 'All' || graphEnvFilter === 'Production');
+
+    if (selectedGraphAssetId && secondarySelectedGraphAssetId && selectedGraphAssetId !== secondarySelectedGraphAssetId) {
+      const path = findShortestPathRoute(selectedGraphAssetId, secondarySelectedGraphAssetId);
+      if (path) {
+        const idxA = path.indexOf(nodeAId);
+        const idxB = path.indexOf(nodeBId);
+        const isOnPath = idxA !== -1 && idxB !== -1 && Math.abs(idxA - idxB) === 1;
+        return isOnPath ? 1.0 : 0.08;
+      }
+      return 0.08;
+    }
+
+    if (selectedGraphAssetId) {
+      const involvesSelected = selectedGraphAssetId === nodeAId || selectedGraphAssetId === nodeBId;
+      return involvesSelected ? 1.0 : 0.1;
+    }
+    return (isNodeAVisibleInEnv && isNodeBVisibleInEnv) ? 1.0 : 0.15;
+  };
+
+  const getTrafficAnimationStyle = (isThreat: boolean) => {
+    if (!animateTrafficFlow) {
+      return { animation: 'none', strokeDasharray: 'none' };
+    }
+    let baseDuration = isThreat ? 0.8 : 1.6;
+    if (trafficThroughput === 'low') baseDuration *= 2.5;
+    if (trafficThroughput === 'high') baseDuration *= 0.55;
+    if (trafficThroughput === 'peak') baseDuration *= 0.25;
+    return {
+      animationDuration: `${baseDuration}s`,
+    };
+  };
 
   // Bind D3 Drag and Zoom Behaviors to SVG and node elements
   useEffect(() => {
@@ -814,14 +935,6 @@ export default function App() {
                 }`}
               >
                 <FileSpreadsheet className="w-3.5 h-3.5 text-indigo-400" /> Audit Logs
-              </button>
-              <button
-                onClick={() => setActiveTab('blueprints')}
-                className={`text-xs px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-all duration-150 cursor-pointer ${
-                  activeTab === 'blueprints' ? 'bg-indigo-600/20 text-indigo-400 font-semibold border border-indigo-500/30 shadow' : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                <Shield className="w-3.5 h-3.5 text-indigo-400" /> Core Blueprints [19]
               </button>
             </div>
           </div>
@@ -1512,7 +1625,7 @@ export default function App() {
               </div>
 
               {/* Advanced Network Filter Bar */}
-              <div className="flex flex-col sm:flex-row bg-[#030712] border border-slate-850/80 p-2.5 rounded-lg gap-3 items-start sm:items-center justify-between text-xs font-mono">
+              <div className="flex flex-col lg:flex-row bg-[#030712] border border-slate-850/80 p-2.5 rounded-lg gap-3 items-start lg:items-center justify-between text-xs font-mono">
                 {/* 1. Environment filter buttons */}
                 <div className="flex items-center gap-2">
                   <span className="text-slate-500 text-[10px] uppercase font-bold">VLAN Scope:</span>
@@ -1572,6 +1685,40 @@ export default function App() {
                     </button>
                   </div>
                 </div>
+
+                {/* 3. Traffic Flow Animation & Speed controls */}
+                <div className="flex items-center gap-2">
+                  <span className="text-slate-500 text-[10px] uppercase font-bold">Traffic Flow:</span>
+                  <button
+                    onClick={() => setAnimateTrafficFlow(!animateTrafficFlow)}
+                    className={`px-2 py-1 rounded text-[10px] cursor-pointer font-bold transition-all border ${
+                      animateTrafficFlow
+                        ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30'
+                        : 'bg-slate-900 border-slate-850 text-slate-500'
+                    }`}
+                    title="Toggle traffic animation"
+                  >
+                    {animateTrafficFlow ? '▶ ACTIVE' : '⏸️ PAUSED'}
+                  </button>
+                  {animateTrafficFlow && (
+                    <div className="flex bg-slate-950 p-0.5 rounded border border-slate-800">
+                      {(['low', 'normal', 'high', 'peak'] as const).map((lvl) => (
+                        <button
+                          key={lvl}
+                          onClick={() => setTrafficThroughput(lvl)}
+                          className={`px-1.5 py-0.5 rounded text-[9px] cursor-pointer transition-all ${
+                            trafficThroughput === lvl
+                              ? 'bg-indigo-950 text-sky-400 font-bold border border-indigo-500/30'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title={`${lvl} level telemetry throughput speed`}
+                        >
+                          {lvl.toUpperCase()}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* SVG Canvas and interactive bounds */}
@@ -1584,8 +1731,8 @@ export default function App() {
 
                 {/* Flow speed control indicators */}
                 <div className="absolute bottom-3 right-4 z-20 pointer-events-none select-none flex items-center gap-2 text-[9px] font-mono text-slate-500 bg-slate-950/80 border border-slate-800 px-2 py-1 rounded">
-                  <span className="w-2 h-2 rounded-full bg-cyber-green animate-ping"></span>
-                  <span>FLOW CONDUITS: {graphMitigationMode === 'attack-simulation' ? 'FAST MALICIOUS (FAST)' : 'CLEAN TELEMETRY (WARM)'}</span>
+                  <span className={`w-2 h-2 rounded-full ${animateTrafficFlow ? 'bg-cyber-green animate-ping' : 'bg-slate-600'}`}></span>
+                  <span>FLOW CONDUITS: {!animateTrafficFlow ? 'PAUSED' : `${trafficThroughput.toUpperCase()} THROUGHPUT`}</span>
                 </div>
 
                 {/* Zoom actions floating tray */}
@@ -1627,6 +1774,129 @@ export default function App() {
                     <span>Fit Canvas</span>
                   </button>
                 </div>
+
+                {/* Selected Path Distance Tooltip near Center-Graph Button */}
+                {(() => {
+                  const shortestPath = findShortestPathRoute(selectedGraphAssetId, secondarySelectedGraphAssetId);
+                  const hops = shortestPath ? shortestPath.length - 1 : "Disconnected";
+                  const sourceName = selectedGraphAssetId ? (ASSET_NAMES[selectedGraphAssetId] || selectedGraphAssetId) : "None";
+                  const targetName = secondarySelectedGraphAssetId ? (ASSET_NAMES[secondarySelectedGraphAssetId] || secondarySelectedGraphAssetId) : "None";
+                  
+                  interface PathWarningDetail {
+                    id: string;
+                    name: string;
+                    isIsolated: boolean;
+                    hasUnpatchedCritical: boolean;
+                  }
+                  
+                  const pathWarnings: PathWarningDetail[] = [];
+                  if (shortestPath) {
+                    shortestPath.forEach(nodeId => {
+                      const isIsolated = !!isolatedAssets[nodeId];
+                      const hasUnpatchedCritical = alerts.some(
+                        a => a.targetAssetId === nodeId && 
+                        a.severity === "Critical" && 
+                        !patchedAssets[nodeId] && 
+                        a.status !== "Remediated"
+                      );
+                      if (isIsolated || hasUnpatchedCritical) {
+                        pathWarnings.push({
+                          id: nodeId,
+                          name: ASSET_NAMES[nodeId] || nodeId,
+                          isIsolated,
+                          hasUnpatchedCritical
+                        });
+                      }
+                    });
+                  }
+                  
+                  return (
+                    <div className="absolute top-[88px] right-4 z-20 flex flex-col w-[280px] bg-slate-950/95 border border-indigo-900/80 p-3 rounded-lg shadow-[0_4px_20px_rgba(0,0,0,0.8)] backdrop-blur-md text-[10px] font-mono text-slate-300">
+                      <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 mb-2">
+                        <span className="text-[#00d4ff] font-extrabold uppercase tracking-wider flex items-center gap-1">
+                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                          Selected Path Distance
+                        </span>
+                        <span className="text-[9px] text-slate-500 bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800 animate-pulse">
+                          {hops === "Disconnected" ? "⚠️ AIR-GAP" : `${hops} ${hops === 1 ? 'HOP' : 'HOPS'}`}
+                        </span>
+                      </div>
+                      
+                      <div className="space-y-1.5">
+                        <div className="flex justify-between items-center bg-slate-950 px-2 py-1 rounded border border-slate-900">
+                          <span className="text-slate-500 text-[9px]">SOURCE [A]</span>
+                          <span className="text-white font-semibold text-right">{sourceName}</span>
+                        </div>
+                        <div className="flex justify-between items-center bg-slate-950 px-2 py-1 rounded border border-slate-900">
+                          <span className="text-indigo-400 text-[9px]">TARGET [B]</span>
+                          <span className="text-indigo-300 font-semibold text-right">{targetName}</span>
+                        </div>
+
+                        <div className="pt-1 select-none pointer-events-none">
+                          <span className="text-slate-500 text-[8px] block mb-1">NETWORK HOPS PATH</span>
+                          {shortestPath ? (
+                            <div className="flex flex-wrap items-center gap-1 bg-[#020617] p-1.5 rounded border border-slate-900/60 text-[9px]">
+                              {shortestPath.map((node, idx) => {
+                                const hasWarning = pathWarnings.some(w => w.id === node);
+                                return (
+                                  <React.Fragment key={node}>
+                                    {idx > 0 && <span className="text-slate-600 text-[8px]">➔</span>}
+                                    <span className={`px-1 py-0.5 rounded text-[8px] font-bold ${
+                                      node === selectedGraphAssetId 
+                                        ? 'bg-sky-950 text-[#00d4ff]' 
+                                        : node === secondarySelectedGraphAssetId 
+                                          ? 'bg-indigo-950 text-[#818cf8]' 
+                                          : 'bg-slate-900 text-slate-400'
+                                    } ${hasWarning ? 'border border-amber-500/50 text-amber-300' : ''}`}>
+                                      {node.replace('ASSET-0', '#')}
+                                      {hasWarning && ' ⚠️'}
+                                    </span>
+                                  </React.Fragment>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <div className="bg-[#181115] text-rose-450 p-1.5 rounded border border-rose-950 text-center font-bold text-[8.5px]">
+                              ⛔ Disconnected (Air-gapped)
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Interactive warnings for isolated/alert states */}
+                        {pathWarnings.length > 0 && (
+                          <div className="mt-2 p-2 bg-amber-955/20 border border-amber-500/30 rounded text-[9.5px] text-amber-300">
+                            <div className="flex items-center gap-1.5 font-bold mb-1 text-amber-400">
+                              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 animate-pulse shrink-0" />
+                              <span>TRAFFIC OBSTRUCTED / EXPOSED</span>
+                            </div>
+                            <p className="text-[8.5px] text-amber-400/80 mb-1.5 leading-normal">
+                              Path traverses quarantined segments or unpatched critical risks. Secure data stream may be compromised.
+                            </p>
+                            <div className="space-y-1">
+                              {pathWarnings.map(warn => (
+                                <div key={warn.id} className="flex items-center justify-between text-[8px] bg-amber-950/40 px-1.5 py-0.5 rounded border border-amber-500/15">
+                                  <span className="font-semibold text-amber-200">{warn.name}</span>
+                                  <span className="text-[7.5px] font-bold text-amber-500 uppercase">
+                                    {warn.isIsolated && warn.hasUnpatchedCritical 
+                                      ? "Isolated & Threat" 
+                                      : warn.isIsolated 
+                                        ? "QUARANTINED" 
+                                        : "CRITICAL ALERT"
+                                    }
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                        
+                        <div className="text-[8.5px] text-slate-500 text-center pt-1 border-t border-slate-900 mt-1">
+                          💡 Click any node on the graph to set source, then click another node to measure hops.
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Quick key bindings label */}
                 <div className="absolute bottom-3 left-4 z-20 pointer-events-none select-none hidden md:flex items-center gap-2 bg-slate-950/85 border border-slate-800/60 px-3 py-1.5 rounded-lg text-[9.5px] font-mono text-slate-400">
@@ -1701,21 +1971,21 @@ export default function App() {
                       const isAsset5Critical = alerts.some(a => a.targetAssetId === "ASSET-005" && a.severity === "Critical" && !patchedAssets["ASSET-005"]);
                       const isThreatConduit5Active = (isAsset5Critical || isAsset2Critical) && !isolatedAssets["ASSET-005"] && !isolatedAssets["ASSET-002"];
 
-                      // Opacity values based on environment filters
-                      const op1 = (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
-                      const op3 = (graphEnvFilter === 'All' || graphEnvFilter === 'Development') ? 1.0 : 0.15;
-                      const opSecureZone = (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
+                      // Checked connections state
+                      const isLink1Selected = selectedGraphAssetId === "ASSET-001" || selectedGraphAssetId === "ASSET-002";
+                      const isLink2Selected = selectedGraphAssetId === "ASSET-005" || selectedGraphAssetId === "ASSET-002";
+                      const isLink3Selected = selectedGraphAssetId === "ASSET-001" || selectedGraphAssetId === "ASSET-004";
 
                       return (
                         <>
                           {/* LINK 1: Prod WebPortal -> Customer Database (Port 5432 vector) */}
-                          <g opacity={op1} className="transition-all duration-300">
+                          <g opacity={getSelectionOpacityForLink("ASSET-001", "ASSET-002")} className="transition-all duration-300">
                             {/* Base channel conduit line */}
                             <path 
                               d={`M ${p1.x} ${p1.y} Q ${midX1} ${midY1} ${p2.x} ${p2.y}`} 
                               fill="none" 
-                              stroke={isThreatConduit1Active ? "#ff0077" : (isolatedAssets["ASSET-001"] || isolatedAssets["ASSET-002"] ? "#475569" : "#1e293b")} 
-                              strokeWidth={isThreatConduit1Active ? "2.5" : "1.5"} 
+                              stroke={isThreatConduit1Active ? "#ff0077" : (isolatedAssets["ASSET-001"] || isolatedAssets["ASSET-002"] ? "#475569" : (selectedGraphAssetId && isLink1Selected ? "#00d4ff" : "#1e293b"))} 
+                              strokeWidth={isThreatConduit1Active ? (selectedGraphAssetId && isLink1Selected ? "3.5" : "2.5") : (selectedGraphAssetId && isLink1Selected ? "2.5" : "1.5")} 
                               strokeDasharray={isolatedAssets["ASSET-001"] || isolatedAssets["ASSET-002"] ? "5 5" : "0"}
                               markerEnd={isThreatConduit1Active ? "url(#arrow-threat)" : "url(#arrow)"}
                             />
@@ -1726,24 +1996,25 @@ export default function App() {
                                 d={`M ${p1.x} ${p1.y} Q ${midX1} ${midY1} ${p2.x} ${p2.y}`} 
                                 fill="none" 
                                 stroke={isThreatConduit1Active && graphMitigationMode !== 'standard' ? "#ff0077" : "#00d4ff"} 
-                                strokeWidth="1.2"
+                                strokeWidth={selectedGraphAssetId && isLink1Selected ? "2.0" : "1.2"}
                                 className={isThreatConduit1Active && graphMitigationMode !== 'standard' ? "animate-flow-laser-threat" : "animate-flow-laser-safe"}
-                                opacity={graphMitigationMode === 'standard' ? "0.3" : "0.9"}
+                                style={getTrafficAnimationStyle(isThreatConduit1Active && graphMitigationMode !== 'standard')}
+                                opacity={graphMitigationMode === 'standard' ? "0.3" : (selectedGraphAssetId && isLink1Selected ? "1.0" : "0.9")}
                               />
                             )}
 
-                            <text x={midX1} y={midY1 - 10} fill={isThreatConduit1Active ? "#f43f5e" : "#51657a"} className="text-[8.5px] font-mono font-bold select-none pointer-events-none" textAnchor="middle" filter="drop-shadow(0 1px 2px black)">
+                            <text x={midX1} y={midY1 - 10} fill={isThreatConduit1Active ? "#f43f5e" : (selectedGraphAssetId && isLink1Selected ? "#00d4ff" : "#51657a")} className="text-[8.5px] font-mono font-bold select-none pointer-events-none" textAnchor="middle" filter="drop-shadow(0 1px 2px black)">
                               {isThreatConduit1Active ? "⚠️ SQL_INJECTION FEED" : "POSTGRES :5432"}
                             </text>
                           </g>
 
                           {/* LINK 2: Payments API -> Customer Database */}
-                          <g opacity={opSecureZone} className="transition-all duration-300">
+                          <g opacity={getSelectionOpacityForLink("ASSET-005", "ASSET-002")} className="transition-all duration-300">
                             <path 
                               d={`M ${p5.x} ${p5.y} Q ${midX5} ${midY5} ${p2.x} ${p2.y}`} 
                               fill="none" 
-                              stroke={isThreatConduit5Active ? "#ff0077" : (isolatedAssets["ASSET-005"] || isolatedAssets["ASSET-002"] ? "#475569" : "#1e293b")} 
-                              strokeWidth="1.5" 
+                              stroke={isThreatConduit5Active ? "#ff0077" : (isolatedAssets["ASSET-005"] || isolatedAssets["ASSET-002"] ? "#475569" : (selectedGraphAssetId && isLink2Selected ? "#34d399" : "#1e293b"))} 
+                              strokeWidth={selectedGraphAssetId && isLink2Selected ? "2.5" : "1.5"} 
                               strokeDasharray={isolatedAssets["ASSET-005"] || isolatedAssets["ASSET-002"] ? "4 4" : "0"}
                               markerEnd="url(#arrow)"
                             />
@@ -1754,24 +2025,25 @@ export default function App() {
                                 d={`M ${p5.x} ${p5.y} Q ${midX5} ${midY5} ${p2.x} ${p2.y}`} 
                                 fill="none" 
                                 stroke={isThreatConduit5Active && graphMitigationMode !== 'standard' ? "#f43f5e" : "#34d399"} 
-                                strokeWidth="1.0"
+                                strokeWidth={selectedGraphAssetId && isLink2Selected ? "1.8" : "1.0"}
                                 className={isThreatConduit5Active && graphMitigationMode !== 'standard' ? "animate-flow-laser-threat" : "animate-flow-laser-safe"}
-                                opacity={graphMitigationMode === 'standard' ? "0.2" : "0.75"}
+                                style={getTrafficAnimationStyle(isThreatConduit5Active && graphMitigationMode !== 'standard')}
+                                opacity={graphMitigationMode === 'standard' ? "0.2" : (selectedGraphAssetId && isLink2Selected ? "0.95" : "0.75")}
                               />
                             )}
 
-                            <text x={midX5} y={midY5 - 8} fill="#4b5563" className="text-[8px] font-mono select-none pointer-events-none" textAnchor="middle">
+                            <text x={midX5} y={midY5 - 8} fill={selectedGraphAssetId && isLink2Selected ? "#34d399" : "#4b5563"} className="text-[8px] font-mono select-none pointer-events-none" textAnchor="middle">
                               billingDB_sync
                             </text>
                           </g>
 
                           {/* LINK 3: Prod WebPortal -> Active Directory Domain Controller */}
-                          <g opacity={opSecureZone} className="transition-all duration-300">
+                          <g opacity={getSelectionOpacityForLink("ASSET-001", "ASSET-004")} className="transition-all duration-300">
                             <path 
                               d={`M ${p1.x} ${p1.y} L ${p4.x} ${p4.y}`} 
                               fill="none" 
-                              stroke={isolatedAssets["ASSET-001"] || isolatedAssets["ASSET-004"] ? "#475569" : "#1e293b"} 
-                              strokeWidth="1.2" 
+                              stroke={isolatedAssets["ASSET-001"] || isolatedAssets["ASSET-004"] ? "#475569" : (selectedGraphAssetId && isLink3Selected ? "#a78bfa" : "#1e293b")} 
+                              strokeWidth={selectedGraphAssetId && isLink3Selected ? "2.2" : "1.2"} 
                               strokeDasharray={isolatedAssets["ASSET-001"] || isolatedAssets["ASSET-004"] ? "4 4" : "3 3"}
                               markerEnd="url(#arrow)"
                             />
@@ -1781,13 +2053,14 @@ export default function App() {
                                 d={`M ${p1.x} ${p1.y} L ${p4.x} ${p4.y}`} 
                                 fill="none" 
                                 stroke="#a78bfa" 
-                                strokeWidth="0.8"
+                                strokeWidth={selectedGraphAssetId && isLink3Selected ? "1.5" : "0.8"}
                                 className="animate-flow-laser-safe"
-                                opacity={graphMitigationMode === 'standard' ? "0.15" : "0.6"}
+                                style={getTrafficAnimationStyle(false)}
+                                opacity={graphMitigationMode === 'standard' ? "0.15" : (selectedGraphAssetId && isLink3Selected ? "0.9" : "0.6")}
                               />
                             )}
 
-                            <text x={(p1.x + p4.x)/2 + 20} y={(p1.y + p4.y)/2 - 10} fill="#4a5568" className="text-[8px] font-mono select-none pointer-events-none" textAnchor="start">
+                            <text x={(p1.x + p4.x)/2 + 20} y={(p1.y + p4.y)/2 - 10} fill={selectedGraphAssetId && isLink3Selected ? "#a78bfa" : "#4a5568"} className="text-[8px] font-mono select-none pointer-events-none" textAnchor="start">
                               kerberos_auth
                             </text>
                           </g>
@@ -1800,23 +2073,27 @@ export default function App() {
                     {/* 1. ASSET-001 (Production Web Portal) */}
                     {(() => {
                       const pos = nodePositions["ASSET-001"] || { x: 220, y: 200 };
-                      const op = (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
+                      const op = getSelectionOpacityForNode("ASSET-001");
                       const hasAlert = alerts.some(a => a.targetAssetId === "ASSET-001" && a.status !== "Remediated");
                       const isCritical = alerts.some(a => a.targetAssetId === "ASSET-001" && a.severity === "Critical" && !patchedAssets["ASSET-001"]);
                       const isVulnerableScan = alerts.some(a => a.targetAssetId === "ASSET-001" && a.verificationStatus === "Vulnerable");
                       const isSelected = selectedGraphAssetId === "ASSET-001";
+                      const isSecondarySelected = secondarySelectedGraphAssetId === "ASSET-001" && selectedGraphAssetId !== "ASSET-001";
                       
                       return (
                         <g 
                           transform={`translate(${pos.x}, ${pos.y})`} 
                           className="node-group cursor-grab active:cursor-grabbing hover:scale-105 transition-all duration-150"
                           data-node-id="ASSET-001"
-                          onClick={(e) => { e.stopPropagation(); setSelectedGraphAssetId("ASSET-001"); }}
+                          onClick={(e) => { e.stopPropagation(); handleSelectNodeInGraph("ASSET-001"); }}
                           opacity={op}
                         >
                           {/* Selected outline tracker */}
                           {isSelected && (
                             <circle r="36" fill="none" stroke="#00d4ff" strokeWidth="2.0" strokeDasharray="3 2" className="animate-spin" style={{ animationDuration: '6s' }} />
+                          )}
+                          {isSecondarySelected && (
+                            <circle r="36" fill="none" stroke="#818cf8" strokeWidth="1.8" strokeDasharray="4 4" className="animate-spin" style={{ animationDuration: '10s' }} />
                           )}
                           {/* Air-gap Containment warning stripes fill */}
                           {isolatedAssets["ASSET-001"] && (
@@ -1861,21 +2138,25 @@ export default function App() {
                     {/* 2. ASSET-002 (Core Database Node) */}
                     {(() => {
                       const pos = nodePositions["ASSET-002"] || { x: 540, y: 180 };
-                      const op = (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
+                      const op = getSelectionOpacityForNode("ASSET-002");
                       const hasAlert = alerts.some(a => a.targetAssetId === "ASSET-002" && a.status !== "Remediated");
                       const isCritical = alerts.some(a => a.targetAssetId === "ASSET-002" && a.severity === "Critical" && !patchedAssets["ASSET-002"]);
                       const isSelected = selectedGraphAssetId === "ASSET-002";
+                      const isSecondarySelected = secondarySelectedGraphAssetId === "ASSET-002" && selectedGraphAssetId !== "ASSET-002";
                       
                       return (
                         <g 
                           transform={`translate(${pos.x}, ${pos.y})`} 
                           className="node-group cursor-grab active:cursor-grabbing hover:scale-105 transition-all duration-150"
                           data-node-id="ASSET-002"
-                          onClick={(e) => { e.stopPropagation(); setSelectedGraphAssetId("ASSET-002"); }}
+                          onClick={(e) => { e.stopPropagation(); handleSelectNodeInGraph("ASSET-002"); }}
                           opacity={op}
                         >
                           {isSelected && (
                             <circle r="36" fill="none" stroke="#00d4ff" strokeWidth="2.0" strokeDasharray="3 2" className="animate-spin" style={{ animationDuration: '6s' }} />
+                          )}
+                          {isSecondarySelected && (
+                            <circle r="36" fill="none" stroke="#818cf8" strokeWidth="1.8" strokeDasharray="4 4" className="animate-spin" style={{ animationDuration: '10s' }} />
                           )}
                           {isolatedAssets["ASSET-002"] && (
                             <circle r="26" fill="url(#isolation-stripes)" className="animate-pulse" />
@@ -1907,26 +2188,29 @@ export default function App() {
                         </g>
                       );
                     })()}
-
                     {/* 3. ASSET-003 (Legacy Sandbox API Gateway - Dev environment) */}
                     {(() => {
                       const pos = nodePositions["ASSET-003"] || { x: 380, y: 80 };
-                      const op = (graphEnvFilter === 'All' || graphEnvFilter === 'Development') ? 1.0 : 0.15;
+                      const op = getSelectionOpacityForNode("ASSET-003");
                       const hasAlert = alerts.some(a => a.targetAssetId === "ASSET-003" && a.status !== "Remediated");
                       const isCritical = alerts.some(a => a.targetAssetId === "ASSET-003" && a.severity === "Critical" && !patchedAssets["ASSET-003"]);
                       const isNewAlert = alerts.some(a => a.targetAssetId === "ASSET-003" && a.status === "New" && !patchedAssets["ASSET-003"]);
                       const isSelected = selectedGraphAssetId === "ASSET-003";
-
+                      const isSecondarySelected = secondarySelectedGraphAssetId === "ASSET-003" && selectedGraphAssetId !== "ASSET-003";
+ 
                       return (
                         <g 
                           transform={`translate(${pos.x}, ${pos.y})`} 
                           className="node-group cursor-grab active:cursor-grabbing hover:scale-105 transition-all duration-150"
                           data-node-id="ASSET-003"
-                          onClick={(e) => { e.stopPropagation(); setSelectedGraphAssetId("ASSET-003"); }}
+                          onClick={(e) => { e.stopPropagation(); handleSelectNodeInGraph("ASSET-003"); }}
                           opacity={op}
                         >
                           {isSelected && (
                             <circle r="32" fill="none" stroke="#00d4ff" strokeWidth="2.0" strokeDasharray="3 2" className="animate-spin" style={{ animationDuration: '6s' }} />
+                          )}
+                          {isSecondarySelected && (
+                            <circle r="32" fill="none" stroke="#818cf8" strokeWidth="1.8" strokeDasharray="4 4" className="animate-spin" style={{ animationDuration: '10s' }} />
                           )}
                           {isolatedAssets["ASSET-003"] && (
                             <circle r="22" fill="url(#isolation-stripes)" className="animate-pulse" />
@@ -1961,26 +2245,29 @@ export default function App() {
                         </g>
                       );
                     })()}
-
                     {/* 4. ASSET-004 (Active Directory Corporate Domain Controller) */}
                     {(() => {
                       const pos = nodePositions["ASSET-004"] || { x: 580, y: 320 };
-                      const op = (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
+                      const op = getSelectionOpacityForNode("ASSET-004");
                       const hasAlert = alerts.some(a => a.targetAssetId === "ASSET-004" && a.status !== "Remediated");
                       const isCritical = alerts.some(a => a.targetAssetId === "ASSET-004" && a.severity === "Critical" && !patchedAssets["ASSET-004"]);
                       const isNewAlert = alerts.some(a => a.targetAssetId === "ASSET-004" && a.status === "New" && !patchedAssets["ASSET-004"]);
                       const isSelected = selectedGraphAssetId === "ASSET-004";
-
+                      const isSecondarySelected = secondarySelectedGraphAssetId === "ASSET-004" && selectedGraphAssetId !== "ASSET-004";
+ 
                       return (
                         <g 
                           transform={`translate(${pos.x}, ${pos.y})`} 
                           className="node-group cursor-grab active:cursor-grabbing hover:scale-105 transition-all duration-150"
                           data-node-id="ASSET-004"
-                          onClick={(e) => { e.stopPropagation(); setSelectedGraphAssetId("ASSET-004"); }}
+                          onClick={(e) => { e.stopPropagation(); handleSelectNodeInGraph("ASSET-004"); }}
                           opacity={op}
                         >
                           {isSelected && (
                             <circle r="34" fill="none" stroke="#00d4ff" strokeWidth="2.0" strokeDasharray="3 2" className="animate-spin" style={{ animationDuration: '6s' }} />
+                          )}
+                          {isSecondarySelected && (
+                            <circle r="34" fill="none" stroke="#818cf8" strokeWidth="1.8" strokeDasharray="4 4" className="animate-spin" style={{ animationDuration: '10s' }} />
                           )}
                           {isolatedAssets["ASSET-004"] && (
                             <circle r="24" fill="url(#isolation-stripes)" className="animate-pulse" />
@@ -2015,25 +2302,28 @@ export default function App() {
                         </g>
                       );
                     })()}
-
                     {/* 5. ASSET-005 (Billing Payments API Server) */}
                     {(() => {
                       const pos = nodePositions["ASSET-005"] || { x: 380, y: 320 };
-                      const op = (graphEnvFilter === 'All' || graphEnvFilter === 'Production') ? 1.0 : 0.15;
+                      const op = getSelectionOpacityForNode("ASSET-005");
                       const hasAlert = alerts.some(a => a.targetAssetId === "ASSET-005" && a.status !== "Remediated");
                       const isCritical = alerts.some(a => a.targetAssetId === "ASSET-005" && a.severity === "Critical" && !patchedAssets["ASSET-005"]);
                       const isSelected = selectedGraphAssetId === "ASSET-005";
-
+                      const isSecondarySelected = secondarySelectedGraphAssetId === "ASSET-005" && selectedGraphAssetId !== "ASSET-005";
+ 
                       return (
                         <g 
                           transform={`translate(${pos.x}, ${pos.y})`} 
                           className="node-group cursor-grab active:cursor-grabbing hover:scale-105 transition-all duration-150"
                           data-node-id="ASSET-005"
-                          onClick={(e) => { e.stopPropagation(); setSelectedGraphAssetId("ASSET-005"); }}
+                          onClick={(e) => { e.stopPropagation(); handleSelectNodeInGraph("ASSET-005"); }}
                           opacity={op}
                         >
                           {isSelected && (
                             <circle r="34" fill="none" stroke="#00d4ff" strokeWidth="2.0" strokeDasharray="3 2" className="animate-spin" style={{ animationDuration: '6s' }} />
+                          )}
+                          {isSecondarySelected && (
+                            <circle r="34" fill="none" stroke="#818cf8" strokeWidth="1.8" strokeDasharray="4 4" className="animate-spin" style={{ animationDuration: '10s' }} />
                           )}
                           {isolatedAssets["ASSET-005"] && (
                             <circle r="24" fill="url(#isolation-stripes)" className="animate-pulse" />
@@ -2361,11 +2651,6 @@ export default function App() {
         )}
         {activeTab === 'logs' && (
           <AuditLogsView logs={auditLogs} onRefresh={fetchData} />
-        )}
-
-        {/* TAB 3: CORE BLUEPRINTS HUB (THE 19 PARTS DOCUMENTATION EXPLORER ARCHITECTURE) */}
-        {activeTab === 'blueprints' && (
-          <DocumentationHub />
         )}
 
       </main>

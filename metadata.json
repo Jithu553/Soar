@@ -1,0 +1,7 @@
+{
+  "name": "Context-Aware Threat Remediation SOAR Platform",
+  "private": true,
+  "description": "Enterprise SOAR platform integrating Threat Modeling, Dynamic VAPT, and Threat Intelligence for context-aware automated remediation playbooks.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
